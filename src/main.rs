@@ -105,14 +105,14 @@ fn main() -> Result<()> {
                 let relative = input_path.strip_prefix(&args.input_dir)?;
                 let output_path = args.output_dir.join(relative);
 
-                if let Some(parent) = output_path.parent() {
-                    if parent.exists() {
-                        // The parent directory for the output file exists, so we assume
-                        // this folder has been processed and skip the file.
-                        skipped.fetch_add(1, Ordering::SeqCst);
-                        return Ok(());
-                    }
+                let input_name = input_path.file_stem().unwrap();
+                let output_file_path = output_path.join(input_name);
+                if output_file_path.exists() {
+                    skipped.fetch_add(1, Ordering::SeqCst);
+                    return Ok(());
+                }
 
+                if let Some(parent) = output_path.parent() {
                     create_dir_all(parent).with_context(|| {
                         format!(
                             "Failed to create output directory for: {}",
