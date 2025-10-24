@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use rayon::prelude::*;
+use hound::WavReader;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use serde::Serialize;
+use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
-/// CLI arguments for wav-files-vad.
+/// CLI arguments for wav-files-vad-api
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Recursively extract speech from WAV files using an external VAD API", long_about = None)]
 struct Args {
@@ -35,7 +37,7 @@ struct VadRequestBody {
 
 /// Validates a WAV file matches the expected format: mono, 16-bit PCM, 16kHz sample rate.
 fn validate_wav(path: &Path) -> Result<bool> {
-    let reader = hound::WavReader::open(path)
+    let reader = WavReader::open(path)
         .with_context(|| format!("Failed to open WAV file: {}", path.display()))?;
 
     let spec = reader.spec();
@@ -54,7 +56,7 @@ fn main() -> Result<()> {
     })?;
 
     // Ensure output directory exists
-    std::fs::create_dir_all(&args.output_dir).with_context(|| {
+    create_dir_all(&args.output_dir).with_context(|| {
         format!(
             "Failed to create output directory: {}",
             args.output_dir.display()
@@ -83,7 +85,7 @@ fn main() -> Result<()> {
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("wav"))
         .collect();
 
-    let pool = rayon::ThreadPoolBuilder::new()
+    let pool = ThreadPoolBuilder::new()
         .num_threads(args.addr_api.len())
         .build()
         .context("Failed to create thread pool")?;
@@ -104,7 +106,14 @@ fn main() -> Result<()> {
                 let output_path = args.output_dir.join(relative);
 
                 if let Some(parent) = output_path.parent() {
-                    std::fs::create_dir_all(parent).with_context(|| {
+                    if parent.exists() {
+                        // The parent directory for the output file exists, so we assume
+                        // this folder has been processed and skip the file.
+                        skipped.fetch_add(1, Ordering::SeqCst);
+                        return Ok(());
+                    }
+
+                    create_dir_all(parent).with_context(|| {
                         format!(
                             "Failed to create output directory for: {}",
                             output_path.display()
@@ -147,5 +156,6 @@ fn main() -> Result<()> {
         processed.load(Ordering::SeqCst),
         skipped.load(Ordering::SeqCst)
     );
+
     Ok(())
 }
